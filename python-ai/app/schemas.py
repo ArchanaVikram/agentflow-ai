@@ -3,6 +3,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 ToolName = Literal["browser", "airtable", "gmail", "outlook", "sheets", "llm"]
+MemoryType = Literal["workflow_success", "workflow_failure", "preference", "note"]
 
 
 class Task(BaseModel):
@@ -61,14 +62,15 @@ class ExecuteResponse(BaseModel):
 class WorkflowRunRequest(BaseModel):
     goal: str = Field(min_length=5, max_length=1000)
     workflow_id: Optional[str] = None
+    user_id: Optional[str] = None
     # To resume a paused workflow, send back the tasks and results you received
     tasks: list[Task] = []
     results: dict = {}
     approved_tasks: list[str] = []
     validations: dict = {}
+    risks: dict = {}
     # Demo helper, e.g. {"gmail": "unavailable"} or {"browser": "flaky"}
     simulate_failures: dict = {}
-    risks: dict = {}
 
 
 class WorkflowRunResponse(BaseModel):
@@ -82,6 +84,8 @@ class WorkflowRunResponse(BaseModel):
     validations: dict = {}
     confidence: Optional[int] = None
     recoveries: list[dict] = []
+    risks: dict = {}
+    memories_used: list[dict] = []
 
 
 class ValidateRequest(BaseModel):
@@ -118,3 +122,35 @@ class RecoverResponse(BaseModel):
     action: Literal["retry", "switch_tool", "escalate"]
     new_tool: Optional[ToolName] = None
     reason: str
+
+
+class MemoryStoreRequest(BaseModel):
+    user_id: Optional[str] = None
+    type: MemoryType = "note"
+    text: str = Field(min_length=3, max_length=2000)
+    metadata: dict = {}
+
+
+class MemoryStoreResponse(BaseModel):
+    id: str
+    total_memories: int
+
+
+class MemorySearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=500)
+    user_id: Optional[str] = None
+    type: Optional[MemoryType] = None
+    top_k: int = Field(default=3, ge=1, le=10)
+
+
+class MemorySearchResult(BaseModel):
+    id: str
+    type: str
+    text: str
+    score: float
+    metadata: dict = {}
+    created_at: str
+
+
+class MemorySearchResponse(BaseModel):
+    results: list[MemorySearchResult]

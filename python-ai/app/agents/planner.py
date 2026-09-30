@@ -1,5 +1,4 @@
 import logging
-from typing import Literal
 
 from fastapi import HTTPException
 from openai import AsyncOpenAI
@@ -35,6 +34,7 @@ Available tools:
 - airtable: store or read records in Airtable
 - sheets: read or write Google Sheets
 - gmail: send or read emails
+- outlook: send or read emails (backup for gmail)
 - llm: writing, summarising or analysing text
 
 Rules:
@@ -44,6 +44,13 @@ Rules:
 - Set requires_approval to true for any task that sends emails, messages or payments, or deletes or bulk-changes data.
 - "intent" is one short sentence describing what the user wants.
 """
+
+
+def _hints_text(hints: list[str] | None) -> str:
+    if not hints:
+        return ""
+    lines = "\n".join(f"- {h}" for h in hints)
+    return f"\n\nRelevant memory from past workflows and user preferences. Use it to plan better:\n{lines}\n"
 
 
 def _demo_plan(req: PlanRequest) -> PlanResponse:
@@ -61,7 +68,7 @@ def _demo_plan(req: PlanRequest) -> PlanResponse:
     )
 
 
-async def create_plan(req: PlanRequest) -> PlanResponse:
+async def create_plan(req: PlanRequest, hints: list[str] | None = None) -> PlanResponse:
     if not settings.openai_api_key:
         logger.warning("No OPENAI_API_KEY set - returning demo plan")
         return _demo_plan(req)
@@ -71,7 +78,7 @@ async def create_plan(req: PlanRequest) -> PlanResponse:
         completion = await client.beta.chat.completions.parse(
             model=settings.openai_model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": SYSTEM_PROMPT + _hints_text(hints)},
                 {"role": "user", "content": req.goal},
             ],
             response_format=PlannerOutput,
@@ -87,7 +94,7 @@ async def create_plan(req: PlanRequest) -> PlanResponse:
     tasks = []
     for t in output.tasks:
         task = Task(**t.model_dump())
-        if task.tool == "gmail":  # safety rule: emails always need approval
+        if task.tool in ("gmail", "outlook"):  # safety rule: emails always need approval
             task.requires_approval = True
         tasks.append(task)
 

@@ -5,9 +5,14 @@ from app.agents.planner import create_plan
 from app.agents.recovery import decide_recovery
 from app.agents.risk import analyze_risk
 from app.agents.validator import validate_task
+from app.memory import search_from_request, store_memory
 from app.schemas import (
     ExecuteRequest,
     ExecuteResponse,
+    MemorySearchRequest,
+    MemorySearchResponse,
+    MemoryStoreRequest,
+    MemoryStoreResponse,
     PlanRequest,
     PlanResponse,
     RecoverRequest,
@@ -53,3 +58,13 @@ async def run(req: WorkflowRunRequest):
 @router.post("/risk/analyze", response_model=RiskResponse)
 async def risk(req: RiskRequest):
     return analyze_risk(req)
+
+
+@router.post("/memory/store", response_model=MemoryStoreResponse)
+async def memory_store(req: MemoryStoreRequest):
+    return store_memory(req)
+
+
+@router.post("/memory/search", response_model=MemorySearchResponse)
+async def memory_search(req: MemorySearchRequest):
+    return MemorySearchResponse(results=search_from_request(req))

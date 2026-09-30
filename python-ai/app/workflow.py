@@ -7,8 +7,11 @@ from app.agents.planner import create_plan
 from app.agents.recovery import decide_recovery
 from app.agents.risk import analyze_risk
 from app.agents.validator import validate_task
+from app.memory import search_memories, store_memory
 from app.schemas import (
     ExecuteRequest,
+    MemorySearchResult,
+    MemoryStoreRequest,
     PlanRequest,
     RecoverRequest,
     RiskRequest,
@@ -22,10 +25,12 @@ from app.schemas import (
 class WorkflowState(TypedDict):
     goal: str
     workflow_id: Optional[str]
+    user_id: Optional[str]
     tasks: list[Task]
     results: dict
     validations: dict
     risks: dict
+    memories_used: list
     approved_tasks: list[str]
     simulate_failures: dict
     attempts: dict
@@ -35,18 +40,45 @@ class WorkflowState(TypedDict):
     pending_task_id: Optional[str]
 
 
+def _hint_line(hit: MemorySearchResult) -> str:
+    labels = {
+        "workflow_success": "Past successful workflow",
+        "workflow_failure": "Past failed workflow (avoid repeating this)",
+        "preference": "User preference",
+    }
+    return f"{labels.get(hit.type, 'Note')}: {hit.text}"
+
+
 async def plan_node(state: WorkflowState) -> dict:
-    """Step 1: create the plan (or reuse it when resuming)."""
+    """Step 1: recall similar past experience, then create the plan (or reuse it when resuming)."""
     if state["tasks"]:
         return {
             "status": "running",
             "logs": state["logs"] + ["Resuming workflow with the existing plan"],
         }
-    plan = await create_plan(PlanRequest(goal=state["goal"], workflow_id=state["workflow_id"]))
+
+    hits = search_memories(
+        state["goal"],
+        user_id=state["user_id"],
+        types=["workflow_success", "workflow_failure", "preference"],
+        top_k=3,
+        min_score=0.3,
+    )
+    logs = list(state["logs"])
+    if hits:
+        logs.append(f"Memory: recalled {len(hits)} relevant memories (best match {round(hits[0].score * 100)}%)")
+    else:
+        logs.append("Memory: no relevant past experience found")
+
+    plan = await create_plan(
+        PlanRequest(goal=state["goal"], workflow_id=state["workflow_id"]),
+        hints=[_hint_line(h) for h in hits],
+    )
     return {
         "tasks": plan.tasks,
         "status": "running",
-        "logs": state["logs"] + [f"Planner created {len(plan.tasks)} tasks"],
+        "memories_used": [{"id": h.id, "type": h.type, "score": h.score, "text": h.text} for h in hits],
+        "logs": logs + [f"Planner created {len(plan.tasks)} tasks"],
     }
 
 
@@ -190,14 +222,45 @@ graph.add_conditional_edges("run_next", _route, {"run_next": "run_next", END: EN
 workflow_app = graph.compile()
 
 
+def _remember_outcome(final: dict) -> str:
+    """Learn from a finished workflow by saving it to long-term memory."""
+    tasks = final["tasks"]
+    steps = " -> ".join(t.name for t in tasks)
+    tools = [t.tool for t in tasks]
+
+    if final["status"] == "completed":
+        store_memory(
+            MemoryStoreRequest(
+                user_id=final["user_id"],
+                type="workflow_success",
+                text=f"{final['goal']}. Steps: {steps}",
+                metadata={"tools": tools, "task_count": len(tasks)},
+            )
+        )
+        return "Memory: saved this successful workflow for future planning"
+
+    problems = "; ".join(r["reason"] for r in final["recoveries"]) or "the workflow did not finish"
+    store_memory(
+        MemoryStoreRequest(
+            user_id=final["user_id"],
+            type="workflow_failure",
+            text=f"{final['goal']}. Problem: {problems}",
+            metadata={"tools": tools, "status": final["status"]},
+        )
+    )
+    return "Memory: saved this failed workflow so it can be avoided next time"
+
+
 async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
     initial: WorkflowState = {
         "goal": req.goal,
         "workflow_id": req.workflow_id,
+        "user_id": req.user_id,
         "tasks": req.tasks,
         "results": req.results,
         "validations": req.validations,
         "risks": req.risks,
+        "memories_used": [],
         "approved_tasks": req.approved_tasks,
         "simulate_failures": req.simulate_failures,
         "attempts": {},
@@ -207,6 +270,10 @@ async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
         "pending_task_id": None,
     }
     final = await workflow_app.ainvoke(initial, config={"recursion_limit": 50})
+
+    logs = final["logs"]
+    if final["status"] in ("completed", "failed", "escalated"):
+        logs = logs + [_remember_outcome(final)]
 
     scores = [v["confidence"] for v in final["validations"].values()]
     confidence = round(sum(scores) / len(scores)) if scores else None
@@ -218,9 +285,10 @@ async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
         pending_task_id=final["pending_task_id"],
         tasks=final["tasks"],
         results=final["results"],
-        logs=final["logs"],
+        logs=logs,
         validations=final["validations"],
         confidence=confidence,
         recoveries=final["recoveries"],
         risks=final["risks"],
+        memories_used=final["memories_used"],
     )
