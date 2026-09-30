@@ -4,10 +4,12 @@ from langgraph.graph import END, StateGraph
 
 from app.agents.executor import execute_task
 from app.agents.planner import create_plan
+from app.agents.validator import validate_task
 from app.schemas import (
     ExecuteRequest,
     PlanRequest,
     Task,
+    ValidateRequest,
     WorkflowRunRequest,
     WorkflowRunResponse,
 )
@@ -18,6 +20,7 @@ class WorkflowState(TypedDict):
     workflow_id: Optional[str]
     tasks: list[Task]
     results: dict
+    validations: dict
     approved_tasks: list[str]
     logs: list[str]
     status: str
@@ -48,7 +51,7 @@ def _next_task(tasks: list[Task]) -> Optional[Task]:
 
 
 async def run_next_node(state: WorkflowState) -> dict:
-    """Step 2: run one task. This node repeats until the workflow stops."""
+    """Step 2: run one task, then validate it. Repeats until the workflow stops."""
     tasks = list(state["tasks"])
     task = _next_task(tasks)
 
@@ -70,13 +73,43 @@ async def run_next_node(state: WorkflowState) -> dict:
     if result.status == "awaiting_approval":
         return {"status": "awaiting_approval", "pending_task_id": task.id, "logs": logs}
 
-    task.status = result.status
-    if result.status == "completed":
-        results = dict(state["results"])
-        results[task.id] = result.output
-        return {"tasks": tasks, "results": results, "pending_task_id": None, "logs": logs, "status": "running"}
+    if result.status == "failed":
+        task.status = "failed"
+        return {"tasks": tasks, "logs": logs, "status": "failed"}
 
-    return {"tasks": tasks, "logs": logs, "status": "failed"}
+    # The task ran: now the Validator checks the result
+    validation = validate_task(
+        ValidateRequest(
+            workflow_id=state["workflow_id"],
+            task=task,
+            output=result.output,
+            context=state["results"],
+        )
+    )
+    logs = logs + [f"Validator: {validation.summary} (confidence {validation.confidence}%)"]
+    validations = dict(state["validations"])
+    validations[task.id] = validation.model_dump()
+
+    if not validation.passed:
+        task.status = "failed"
+        return {
+            "tasks": tasks,
+            "validations": validations,
+            "logs": logs + [f"Validation failed for task {task.id}"],
+            "status": "failed",
+        }
+
+    task.status = "completed"
+    results = dict(state["results"])
+    results[task.id] = result.output
+    return {
+        "tasks": tasks,
+        "results": results,
+        "validations": validations,
+        "pending_task_id": None,
+        "logs": logs,
+        "status": "running",
+    }
 
 
 def _route(state: WorkflowState) -> str:
@@ -98,12 +131,17 @@ async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
         "workflow_id": req.workflow_id,
         "tasks": req.tasks,
         "results": req.results,
+        "validations": req.validations,
         "approved_tasks": req.approved_tasks,
         "logs": [],
         "status": "running",
         "pending_task_id": None,
     }
     final = await workflow_app.ainvoke(initial, config={"recursion_limit": 50})
+
+    scores = [v["confidence"] for v in final["validations"].values()]
+    confidence = round(sum(scores) / len(scores)) if scores else None
+
     return WorkflowRunResponse(
         workflow_id=final["workflow_id"],
         goal=final["goal"],
@@ -112,4 +150,6 @@ async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
         tasks=final["tasks"],
         results=final["results"],
         logs=final["logs"],
+        validations=final["validations"],
+        confidence=confidence,
     )

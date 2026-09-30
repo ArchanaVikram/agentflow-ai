@@ -66,6 +66,7 @@ class WorkflowRunRequest(BaseModel):
     tasks: list[Task] = []
     results: dict = {}
     approved_tasks: list[str] = []
+    validations: dict = {}
 
 
 class WorkflowRunResponse(BaseModel):
@@ -76,3 +77,28 @@ class WorkflowRunResponse(BaseModel):
     tasks: list[Task]
     results: dict
     logs: list[str]
+    validations: dict = {}
+    confidence: Optional[int] = None
+
+    
+
+class ValidateRequest(BaseModel):
+    workflow_id: Optional[str] = None
+    task: Task
+    output: dict = {}
+    context: dict = {}
+
+
+class ValidationCheck(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class ValidateResponse(BaseModel):
+    workflow_id: Optional[str] = None
+    task_id: str
+    passed: bool
+    confidence: int
+    checks: list[ValidationCheck]
+    summary: str

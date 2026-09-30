@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.agents.executor import execute_task
 from app.agents.planner import create_plan
 from app.agents.risk import analyze_risk
+from app.agents.validator import validate_task
 from app.schemas import (
     ExecuteRequest,
     ExecuteResponse,
@@ -10,6 +11,8 @@ from app.schemas import (
     PlanResponse,
     RiskRequest,
     RiskResponse,
+    ValidateRequest,
+    ValidateResponse,
     WorkflowRunRequest,
     WorkflowRunResponse,
 )
@@ -27,6 +30,11 @@ async def plan(req: PlanRequest):
 @router.post("/agent/execute", response_model=ExecuteResponse)
 async def execute(req: ExecuteRequest):
     return await execute_task(req)
+
+
+@router.post("/agent/validate", response_model=ValidateResponse)
+async def validate(req: ValidateRequest):
+    return validate_task(req)
 
 
 @router.post("/agent/run", response_model=WorkflowRunResponse)
