@@ -80,6 +80,7 @@ HANDLERS = {
     "browser": _validate_browser,
     "airtable": _validate_airtable,
     "gmail": _validate_gmail,
+    "outlook": _validate_gmail,
     "sheets": _validate_sheets,
     "llm": _validate_llm,
 }

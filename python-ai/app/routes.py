@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.agents.executor import execute_task
 from app.agents.planner import create_plan
+from app.agents.recovery import decide_recovery
 from app.agents.risk import analyze_risk
 from app.agents.validator import validate_task
 from app.schemas import (
@@ -9,6 +10,8 @@ from app.schemas import (
     ExecuteResponse,
     PlanRequest,
     PlanResponse,
+    RecoverRequest,
+    RecoverResponse,
     RiskRequest,
     RiskResponse,
     ValidateRequest,
@@ -35,6 +38,11 @@ async def execute(req: ExecuteRequest):
 @router.post("/agent/validate", response_model=ValidateResponse)
 async def validate(req: ValidateRequest):
     return validate_task(req)
+
+
+@router.post("/agent/recover", response_model=RecoverResponse)
+async def recover(req: RecoverRequest):
+    return decide_recovery(req)
 
 
 @router.post("/agent/run", response_model=WorkflowRunResponse)

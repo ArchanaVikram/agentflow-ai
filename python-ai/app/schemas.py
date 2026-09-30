@@ -2,7 +2,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-ToolName = Literal["browser", "airtable", "gmail", "sheets", "llm"]
+ToolName = Literal["browser", "airtable", "gmail", "outlook", "sheets", "llm"]
 
 
 class Task(BaseModel):
@@ -40,13 +40,13 @@ class RiskResponse(BaseModel):
     requires_approval: bool
     reason: str
 
-    
 
 class ExecuteRequest(BaseModel):
     workflow_id: Optional[str] = None
     task: Task
     context: dict = {}  # outputs of earlier tasks, keyed by task id
     approved: bool = False
+    simulate_failure: Optional[Literal["unavailable", "flaky"]] = None  # for demos
 
 
 class ExecuteResponse(BaseModel):
@@ -57,7 +57,6 @@ class ExecuteResponse(BaseModel):
     logs: list[str] = []
     error: Optional[str] = None
 
-    
 
 class WorkflowRunRequest(BaseModel):
     goal: str = Field(min_length=5, max_length=1000)
@@ -67,20 +66,22 @@ class WorkflowRunRequest(BaseModel):
     results: dict = {}
     approved_tasks: list[str] = []
     validations: dict = {}
+    # Demo helper, e.g. {"gmail": "unavailable"} or {"browser": "flaky"}
+    simulate_failures: dict = {}
 
 
 class WorkflowRunResponse(BaseModel):
     workflow_id: Optional[str] = None
     goal: str
-    status: Literal["completed", "awaiting_approval", "failed"]
+    status: Literal["completed", "awaiting_approval", "failed", "escalated"]
     pending_task_id: Optional[str] = None
     tasks: list[Task]
     results: dict
     logs: list[str]
     validations: dict = {}
     confidence: Optional[int] = None
+    recoveries: list[dict] = []
 
-    
 
 class ValidateRequest(BaseModel):
     workflow_id: Optional[str] = None
@@ -102,3 +103,17 @@ class ValidateResponse(BaseModel):
     confidence: int
     checks: list[ValidationCheck]
     summary: str
+
+
+class RecoverRequest(BaseModel):
+    workflow_id: Optional[str] = None
+    task: Task
+    error: str
+    attempt: int = 1
+
+
+class RecoverResponse(BaseModel):
+    task_id: str
+    action: Literal["retry", "switch_tool", "escalate"]
+    new_tool: Optional[ToolName] = None
+    reason: str

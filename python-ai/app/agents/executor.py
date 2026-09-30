@@ -1,7 +1,7 @@
 import logging
 
-from app.config import settings
 from app.agents.browser_tool import URL_PATTERN, read_page
+from app.config import settings
 from app.schemas import ExecuteRequest, ExecuteResponse, Task
 
 logger = logging.getLogger("executor")
@@ -51,6 +51,12 @@ async def _gmail(task: Task, context: dict, logs: list[str]) -> dict:
     return {"emails_sent": len(recipients), "recipients": recipients}
 
 
+async def _outlook(task: Task, context: dict, logs: list[str]) -> dict:
+    result = await _gmail(task, context, logs)
+    logs[-1] = logs[-1].replace("(mock)", "via Outlook (mock)")
+    return result
+
+
 async def _sheets(task: Task, context: dict, logs: list[str]) -> dict:
     startups = _previous_output(context, task.depends_on).get("startups", [])
     logs.append(f"Wrote {len(startups)} rows to Google Sheets (mock)")
@@ -66,6 +72,7 @@ TOOLS = {
     "browser": _browser,
     "airtable": _airtable,
     "gmail": _gmail,
+    "outlook": _outlook,
     "sheets": _sheets,
     "llm": _llm,
 }
@@ -73,7 +80,7 @@ TOOLS = {
 
 async def execute_task(req: ExecuteRequest) -> ExecuteResponse:
     task = req.task
-    logs = [f"Executor started task {task.id}: {task.name}"]
+    logs = [f"Executor started task {task.id}: {task.name} (tool: {task.tool})"]
 
     # Human-in-the-loop: risky tasks wait for approval
     if task.requires_approval and not req.approved:
@@ -95,6 +102,12 @@ async def execute_task(req: ExecuteRequest) -> ExecuteResponse:
         )
 
     try:
+        # Demo helper: pretend the tool is broken
+        if req.simulate_failure == "unavailable":
+            raise RuntimeError(f"503 Service unavailable: {task.tool}")
+        if req.simulate_failure == "flaky":
+            raise RuntimeError(f"Timeout while contacting {task.tool}")
+
         output = await TOOLS[task.tool](task, req.context, logs)
         logs.append(f"Task {task.id} completed")
         return ExecuteResponse(
