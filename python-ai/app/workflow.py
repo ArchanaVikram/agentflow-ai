@@ -5,11 +5,13 @@ from langgraph.graph import END, StateGraph
 from app.agents.executor import execute_task
 from app.agents.planner import create_plan
 from app.agents.recovery import decide_recovery
+from app.agents.risk import analyze_risk
 from app.agents.validator import validate_task
 from app.schemas import (
     ExecuteRequest,
     PlanRequest,
     RecoverRequest,
+    RiskRequest,
     Task,
     ValidateRequest,
     WorkflowRunRequest,
@@ -23,6 +25,7 @@ class WorkflowState(TypedDict):
     tasks: list[Task]
     results: dict
     validations: dict
+    risks: dict
     approved_tasks: list[str]
     simulate_failures: dict
     attempts: dict
@@ -94,16 +97,8 @@ def _handle_failure(state: WorkflowState, tasks: list[Task], task: Task, error: 
     return {**update, "status": "escalated", "pending_task_id": task.id}
 
 
-async def run_next_node(state: WorkflowState) -> dict:
-    """Step 2: run one task, validate it, and recover if something goes wrong."""
-    tasks = list(state["tasks"])
-    task = _next_task(tasks)
-
-    if task is None:
-        if all(t.status == "completed" for t in tasks):
-            return {"status": "completed", "pending_task_id": None, "logs": state["logs"] + ["Workflow completed"]}
-        return {"status": "failed", "logs": state["logs"] + ["Workflow stopped: no task can run"]}
-
+async def _run_task(state: WorkflowState, tasks: list[Task], task: Task) -> dict:
+    """Execute one task, validate it, and recover if something goes wrong."""
     # Demo helper: decide whether to simulate a failure for this task
     mode = state["simulate_failures"].get(task.tool)
     attempt_no = state["attempts"].get(task.id, 0)
@@ -121,7 +116,7 @@ async def run_next_node(state: WorkflowState) -> dict:
     logs = state["logs"] + result.logs
 
     if result.status == "awaiting_approval":
-        return {"status": "awaiting_approval", "pending_task_id": task.id, "logs": logs}
+        return {"tasks": tasks, "status": "awaiting_approval", "pending_task_id": task.id, "logs": logs}
 
     if result.status == "failed":
         return _handle_failure(state, tasks, task, result.error or "Unknown error", logs, state["validations"])
@@ -157,6 +152,31 @@ async def run_next_node(state: WorkflowState) -> dict:
     }
 
 
+async def run_next_node(state: WorkflowState) -> dict:
+    """Step 2: risk-check the next task, then run it."""
+    tasks = list(state["tasks"])
+    task = _next_task(tasks)
+
+    if task is None:
+        if all(t.status == "completed" for t in tasks):
+            return {"status": "completed", "pending_task_id": None, "logs": state["logs"] + ["Workflow completed"]}
+        return {"status": "failed", "logs": state["logs"] + ["Workflow stopped: no task can run"]}
+
+    # Risk engine: score each task once, before it runs
+    risks = dict(state["risks"])
+    logs = list(state["logs"])
+    if task.id not in risks:
+        risk = analyze_risk(RiskRequest(action=f"{task.name}: {task.description}", tool=task.tool))
+        risks[task.id] = risk.model_dump()
+        logs.append(f"Risk check: task {task.id} scored {risk.score}/100 ({risk.level}) - {risk.reason}")
+        if risk.requires_approval and not task.requires_approval:
+            task.requires_approval = True
+            logs.append(f"Task {task.id} now requires human approval")
+
+    update = await _run_task({**state, "logs": logs}, tasks, task)
+    return {**update, "risks": risks}
+
+
 def _route(state: WorkflowState) -> str:
     return "run_next" if state["status"] == "running" else END
 
@@ -177,6 +197,7 @@ async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
         "tasks": req.tasks,
         "results": req.results,
         "validations": req.validations,
+        "risks": req.risks,
         "approved_tasks": req.approved_tasks,
         "simulate_failures": req.simulate_failures,
         "attempts": {},
@@ -201,4 +222,5 @@ async def run_workflow(req: WorkflowRunRequest) -> WorkflowRunResponse:
         validations=final["validations"],
         confidence=confidence,
         recoveries=final["recoveries"],
+        risks=final["risks"],
     )

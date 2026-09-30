@@ -68,6 +68,7 @@ class WorkflowRunRequest(BaseModel):
     validations: dict = {}
     # Demo helper, e.g. {"gmail": "unavailable"} or {"browser": "flaky"}
     simulate_failures: dict = {}
+    risks: dict = {}
 
 
 class WorkflowRunResponse(BaseModel):
