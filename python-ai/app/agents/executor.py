@@ -22,18 +22,31 @@ def _previous_output(context: dict, depends_on: list[str]) -> dict:
     return {}
 
 
+def _wants_emails(task: Task) -> bool:
+    text = f"{task.name} {task.description}".lower()
+    return "email" in text or "contact" in text
+
+
+def _with_emails(startups: list[dict]) -> list[dict]:
+    names = {s["name"] for s in startups}
+    return [s for s in DEMO_STARTUPS if s["name"] in names]
+
+
 async def _browser(task: Task, context: dict, logs: list[str]) -> dict:
     match = URL_PATTERN.search(f"{task.name} {task.description}")
     if match and settings.real_browser:
         return await read_page(match.group(0), logs)
 
-    text = f"{task.name} {task.description}".lower()
-    if "email" in text or "contact" in text:
-        previous = _previous_output(context, task.depends_on)
-        names = {s["name"] for s in previous.get("startups", [])}
-        found = [s for s in DEMO_STARTUPS if s["name"] in names]
+    previous_startups = _previous_output(context, task.depends_on).get("startups", [])
+    if previous_startups and _wants_emails(task):
+        found = _with_emails(previous_startups)
         logs.append(f"Visited {len(found)} websites and extracted contact emails")
         return {"startups": found}
+
+    if _wants_emails(task):
+        logs.append("Searched the web for AI startups and collected contact emails")
+        return {"startups": DEMO_STARTUPS}
+
     logs.append("Searched the web for AI startups")
     return {"startups": [{"name": s["name"], "website": s["website"]} for s in DEMO_STARTUPS]}
 
@@ -60,12 +73,21 @@ async def _outlook(task: Task, context: dict, logs: list[str]) -> dict:
 async def _sheets(task: Task, context: dict, logs: list[str]) -> dict:
     startups = _previous_output(context, task.depends_on).get("startups", [])
     logs.append(f"Wrote {len(startups)} rows to Google Sheets (mock)")
-    return {"rows_written": len(startups)}
+    return {"rows_written": len(startups), "startups": startups}
 
 
 async def _llm(task: Task, context: dict, logs: list[str]) -> dict:
-    logs.append("Generated text with the language model (mock)")
-    return {"text": f"Mock result for: {task.name}"}
+    startups = _previous_output(context, task.depends_on).get("startups", [])
+    if startups and _wants_emails(task):
+        startups = _with_emails(startups)
+        logs.append(f"Generated text with the language model and extracted details for {len(startups)} startups (mock)")
+    else:
+        logs.append("Generated text with the language model (mock)")
+
+    output: dict = {"text": f"Mock result for: {task.name}"}
+    if startups:  # pass the data along so later tasks can use it
+        output["startups"] = startups
+    return output
 
 
 TOOLS = {
