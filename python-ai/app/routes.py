@@ -1,10 +1,13 @@
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.agents.executor import execute_task
 from app.agents.planner import create_plan
 from app.agents.recovery import decide_recovery
 from app.agents.risk import analyze_risk
 from app.agents.validator import validate_task
+from app.mcp import McpPermissionRequest, McpTool, McpToolsResponse, list_tools, set_permission
 from app.memory import search_from_request, store_memory
 from app.schemas import (
     ExecuteRequest,
@@ -68,3 +71,18 @@ async def memory_store(req: MemoryStoreRequest):
 @router.post("/memory/search", response_model=MemorySearchResponse)
 async def memory_search(req: MemorySearchRequest):
     return MemorySearchResponse(results=search_from_request(req))
+
+
+@router.get("/mcp/tools", response_model=McpToolsResponse)
+async def mcp_tools(search: Optional[str] = None):
+    return McpToolsResponse(tools=list_tools(search))
+
+
+@router.post("/mcp/permissions", response_model=McpTool)
+async def mcp_permissions(req: McpPermissionRequest):
+    try:
+        return set_permission(req.tool, req.enabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown tool '{req.tool}'")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

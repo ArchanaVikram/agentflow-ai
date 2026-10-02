@@ -1,7 +1,11 @@
+import json
 import logging
+
+from openai import AsyncOpenAI
 
 from app.agents.browser_tool import URL_PATTERN, read_page
 from app.config import settings
+from app.mcp import is_enabled
 from app.schemas import ExecuteRequest, ExecuteResponse, Task
 
 logger = logging.getLogger("executor")
@@ -76,15 +80,44 @@ async def _sheets(task: Task, context: dict, logs: list[str]) -> dict:
     return {"rows_written": len(startups), "startups": startups}
 
 
+async def _generate_text(task: Task, previous: dict) -> str:
+    client = AsyncOpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url or None)
+    data = json.dumps(previous, ensure_ascii=False)[:3000]
+    completion = await client.chat.completions.create(
+        model=settings.llm_model,
+        temperature=0.4,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are the writing tool of an automation agent. Do the task using ONLY the data provided. "
+                    "Do not invent facts, people or contact details. Sign emails as [Your Name]. "
+                    "Reply with the final text only, under 200 words."
+                ),
+            },
+            {"role": "user", "content": f"Task: {task.name}\nDetails: {task.description}\n\nData so far (JSON):\n{data}"},
+        ],
+    )
+    return (completion.choices[0].message.content or "").strip()
+
+
 async def _llm(task: Task, context: dict, logs: list[str]) -> dict:
-    startups = _previous_output(context, task.depends_on).get("startups", [])
+    previous = _previous_output(context, task.depends_on)
+    startups = previous.get("startups", [])
     if startups and _wants_emails(task):
         startups = _with_emails(startups)
-        logs.append(f"Generated text with the language model and extracted details for {len(startups)} startups (mock)")
+
+    text = f"Mock result for: {task.name}"
+    if settings.llm_api_key:
+        try:
+            text = await _generate_text(task, previous)
+            logs.append("Generated text with the language model")
+        except Exception as e:
+            logs.append(f"Language model unavailable ({str(e)[:100]}); used mock text")
     else:
         logs.append("Generated text with the language model (mock)")
 
-    output: dict = {"text": f"Mock result for: {task.name}"}
+    output: dict = {"text": text}
     if startups:  # pass the data along so later tasks can use it
         output["startups"] = startups
     return output
@@ -103,6 +136,17 @@ TOOLS = {
 async def execute_task(req: ExecuteRequest) -> ExecuteResponse:
     task = req.task
     logs = [f"Executor started task {task.id}: {task.name} (tool: {task.tool})"]
+
+    # MCP permissions: refuse tools that have been switched off
+    if not is_enabled(task.tool):
+        logs.append(f"Tool '{task.tool}' is switched off in the permission settings")
+        return ExecuteResponse(
+            workflow_id=req.workflow_id,
+            task_id=task.id,
+            status="failed",
+            logs=logs,
+            error=f"Permission denied: tool '{task.tool}' is switched off",
+        )
 
     # Human-in-the-loop: risky tasks wait for approval
     if task.requires_approval and not req.approved:

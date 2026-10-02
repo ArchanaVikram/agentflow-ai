@@ -20,6 +20,9 @@ def decide_recovery(req: RecoverRequest) -> RecoverResponse:
     def reply(action: str, reason: str, new_tool: str | None = None) -> RecoverResponse:
         return RecoverResponse(task_id=req.task.id, action=action, new_tool=new_tool, reason=reason)
 
+    if error.startswith("permission denied"):
+        return reply("escalate", f"{tool} is switched off in the permission settings - a human must enable it first")
+
     if error.startswith("validation failed"):
         if req.attempt == 1:
             return reply("retry", "Result did not pass validation, trying once more")
