@@ -81,3 +81,13 @@ Add `"simulate_failures": {"gmail": "unavailable"}` (or `{"browser": "flaky"}`) 
 ## Notes
 - Tools (Airtable, Gmail, Sheets) are mocks in this version. The API stays the same when real tools are added.
 - Memories are stored per `user_id` in `data/memory.json`.
+
+## MCP tools and permissions
+- `GET /mcp/tools` lists the connectors (Gmail, Outlook, Airtable, Google Sheets, Slack, Notion, HubSpot, Salesforce, plus built-in browser and llm). Add `?search=email` to filter. Each tool has `status`: `live` (real), `mock` (simulated) or `planned` (not built yet), plus `enabled` and its `actions` with a risk level.
+- `POST /mcp/permissions` with `{"tool": "gmail", "enabled": false}` switches a tool on or off. If a workflow needs a switched-off tool, it stops with `status: "escalated"` and `pending_task_id` set to that task. The `browser` and `llm` tools cannot be switched off.
+
+## Rate limits
+Per client address: 60 requests per minute on all endpoints, and 10 per minute on `POST /agent/run`. Above that the API returns `429` with a `Retry-After` header, so your backend should wait and retry. Change the limits with `RATE_LIMIT_PER_MINUTE` and `RUN_LIMIT_PER_MINUTE` in `.env`.
+
+## Language model
+Set `LLM_API_KEY` in `.env` (a free Gemini key works) to get real plans for any goal. Leave it empty to use the fixed demo plan. `LLM_BASE_URL` and `LLM_MODEL` let you switch to any OpenAI-compatible provider.

@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     real_browser: bool = True
     browser_headless: bool = False  # False = you can watch the browser window
 
+    # Rate limits (requests per minute, per client address)
+    rate_limit_per_minute: int = 60
+    run_limit_per_minute: int = 10
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
